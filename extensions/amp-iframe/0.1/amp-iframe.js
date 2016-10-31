@@ -19,12 +19,12 @@ import {isAdPositionAllowed} from '../../../src/ad-helper';
 import {isLayoutSizeDefined} from '../../../src/layout';
 import {endsWith} from '../../../src/string';
 import {listenFor} from '../../../src/iframe-helper';
-import {loadPromise} from '../../../src/event-helper';
 import {parseUrl} from '../../../src/url';
 import {removeElement} from '../../../src/dom';
 import {timerFor} from '../../../src/timer';
 import {user} from '../../../src/log';
 import {urls} from '../../../src/config';
+import {moveLayoutRect} from '../../../src/layout-rect';
 
 /** @const {string} */
 const TAG_ = 'amp-iframe';
@@ -160,10 +160,8 @@ export class AmpIframe extends AMP.BaseElement {
     this.unlistenViewportChanges_ = null;
 
     /**
-     * The layout box of the ad iframe (as opposed to the amp-ad tag).
-     * In practice it often has padding to create a grey or similar box
-     * around ads.
-     * @private {!LayoutRect}
+     * The (relative) layout box of the ad iframe to the amp-ad tag.
+     * @private {?../../../src/layout-rect.LayoutRectDef}
      */
     this.iframeLayoutBox_ = null;
 
@@ -178,6 +176,10 @@ export class AmpIframe extends AMP.BaseElement {
 
     /** @private {!IntersectionObserver} */
     this.intersectionObserver_ = null;
+
+    if (!this.element.hasAttribute('frameborder')) {
+      this.element.setAttribute('frameborder', '0');
+    }
   }
 
   /**
@@ -206,8 +208,9 @@ export class AmpIframe extends AMP.BaseElement {
    */
   measureIframeLayoutBox_() {
     if (this.iframe_) {
-      this.iframeLayoutBox_ =
-          this.getViewport().getLayoutRect(this.iframe_);
+      const iframeBox = this.getViewport().getLayoutRect(this.iframe_);
+      const box = this.getLayoutBox();
+      this.iframeLayoutBox_ = moveLayoutRect(iframeBox, -box.left, -box.top);
     }
   }
 
@@ -218,10 +221,13 @@ export class AmpIframe extends AMP.BaseElement {
     if (!this.iframe_) {
       return super.getIntersectionElementLayoutBox();
     }
+    const box = this.getLayoutBox();
     if (!this.iframeLayoutBox_) {
       this.measureIframeLayoutBox_();
     }
-    return this.iframeLayoutBox_;
+    // If the iframe is full size, we avoid an object allocation by moving box.
+    return moveLayoutRect(box, this.iframeLayoutBox_.left,
+        this.iframeLayoutBox_.top);
   }
 
   /** @override */
@@ -306,7 +312,7 @@ export class AmpIframe extends AMP.BaseElement {
 
     this.container_.appendChild(iframe);
 
-    return loadPromise(iframe).then(() => {
+    return this.loadPromise(iframe).then(() => {
       // On iOS the iframe at times fails to render inside the `overflow:auto`
       // container. To avoid this problem, we set the `overflow:auto` property
       // 1s later via `amp-active` class.
@@ -396,15 +402,16 @@ export class AmpIframe extends AMP.BaseElement {
   updateSize_(height, width) {
     if (!this.isResizable_) {
       user().error(TAG_,
-          'ignoring embed-size request because this iframe is not resizable',
+          'Ignoring embed-size request because this iframe is not resizable',
           this.element);
       return;
     }
 
     if (height < 100) {
       user().error(TAG_,
-          'ignoring embed-size request because the resize height is ' +
-          'less than 100px',
+          'Ignoring embed-size request because the resize height is less ' +
+          'than 100px. If you are using amp-iframe to display ads, consider ' +
+          'using amp-ad instead.',
           this.element);
       return;
     }
@@ -412,17 +419,19 @@ export class AmpIframe extends AMP.BaseElement {
     // Calculate new width and height of the container to include the padding.
     // If padding is negative, just use the requested width and height directly.
     let newHeight, newWidth;
-    if (height !== undefined) {
+    height = parseInt(height, 10);
+    if (!isNaN(height)) {
       newHeight = Math.max(
-        (this.element./*OK*/offsetHeight - this.iframe_./*OK*/offsetHeight)
-            + height,
-        height);
+          height + (this.element./*OK*/offsetHeight
+              - this.iframe_./*OK*/offsetHeight),
+          height);
     }
-    if (width !== undefined) {
+    width = parseInt(width, 10);
+    if (!isNaN(width)) {
       newWidth = Math.max(
-        (this.element./*OK*/offsetWidth - this.iframe_./*OK*/offsetWidth)
-            + width,
-        width);
+          width + (this.element./*OK*/offsetWidth
+              - this.iframe_./*OK*/offsetWidth),
+          width);
     }
 
     if (newHeight !== undefined || newWidth !== undefined) {
@@ -436,7 +445,7 @@ export class AmpIframe extends AMP.BaseElement {
       }, () => {});
     } else {
       user().error(TAG_,
-          'ignoring embed-size request because'
+          'Ignoring embed-size request because'
           + 'no width or height value is provided',
           this.element);
     }
